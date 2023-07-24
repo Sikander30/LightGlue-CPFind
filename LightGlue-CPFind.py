@@ -7,7 +7,7 @@ import os
 import time
 
 
-def find_points(input_file_path: str, output_file_path: str, working_dir, extractor, matcher, batch_size=16):
+def find_points(input_file_path: str, output_file_path: str, working_dir, extractor, matcher, batch_size):
     images = []
 
     with open(input_file_path, 'r', encoding='utf-8') as input_file:
@@ -30,21 +30,39 @@ def find_points(input_file_path: str, output_file_path: str, working_dir, extrac
             features = []
             num_images = len(images)
             nj = NvJpeg()
-            for current_image in range(num_images):
-                print(f'Extracting features from {images[current_image]}.')
+            for batch_start in range(0, num_images, batch_size):
+                print(f'Extracting features from {images[batch_start]}.')
                 # image = load_image(os.path.join(working_dir, images[current_image])).cuda()
                 # nvjpg is much faster
-                image = (torch.from_numpy(
-                    nj.read(os.path.join(working_dir, images[current_image]))).float().cuda() / 255.0).permute(2, 0, 1)
-                feats = extractor.extract(image)
-                features.append(
-                    {
-                        'keypoints': feats['keypoints'].detach(),
-                        'keypoint_scores': feats['keypoint_scores'].detach(),
-                        'descriptors': feats['descriptors'].detach(),
-                        'image_size': feats['image_size'].detach()
-                    }
-                )
+                image_pixels = []
+                current_batch_size = min(batch_size, num_images - batch_start)
+                for i in range(current_batch_size):
+                    img = (torch.from_numpy(nj.read(
+                        os.path.join(working_dir, images[batch_start + i]))).float().cuda() / 255.0).permute(2, 0, 1)
+                    image_pixels.append(img)
+
+                image_stack = torch.stack(image_pixels).detach()
+                feats = extractor.extract(image_stack)
+
+                if batch_size != 1:
+                    for i in range(current_batch_size):
+                        features.append(
+                            {
+                                'keypoints': feats[i]['keypoints'].detach(),
+                                'keypoint_scores': feats[i]['keypoint_scores'].detach(),
+                                'descriptors': feats[i]['descriptors'].detach(),
+                                'image_size': feats[i]['image_size'].detach()
+                            }
+                        )
+                else:
+                    features.append(
+                        {
+                            'keypoints': feats['keypoints'].detach(),
+                            'keypoint_scores': feats['keypoint_scores'].detach(),
+                            'descriptors': feats['descriptors'].detach(),
+                            'image_size': feats['image_size'].detach()
+                        }
+                    )
 
             # Find matches
             control_points = []
@@ -88,6 +106,7 @@ if __name__ == '__main__':
 
     parser.add_argument('input_project')
     parser.add_argument('-o', '--output', help='Output file.', required=True)
+    parser.add_argument('-b', '--batch-size', help='Batch Size for feature extractor (default = 1)', required=False)
 
     args = parser.parse_args()
 
@@ -95,6 +114,11 @@ if __name__ == '__main__':
     if args.input_project is None:
         print('LightGlue-CPFind: No project file given')
         exit(-1)
+
+    if args.batch_size is not None:
+        batch_size = int(args.batch_size)
+    else:
+        batch_size = 1
 
     extractor = SuperPoint(max_num_keypoints=128).eval().cuda()
     matcher = LightGlue(features='superpoint').eval().cuda()
@@ -105,7 +129,7 @@ if __name__ == '__main__':
     out_path = f'{args.output}.temp'
 
     start_time = time.time()
-    find_points(args.input_project, out_path, working_dir, extractor, matcher)
+    find_points(args.input_project, out_path, working_dir, extractor, matcher, batch_size)
     end_time = time.time()
     print(f'Execution time: {end_time - start_time} seconds.')
 
