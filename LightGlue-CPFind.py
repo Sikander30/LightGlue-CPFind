@@ -1,10 +1,13 @@
-import torch.cuda
+import torch
+import torchvision
 from lightglue import LightGlue, SuperPoint, DISK
-from lightglue.utils import load_image, rbd
-from nvjpeg import NvJpeg
+from lightglue.utils import rbd
 import argparse
 import os
 import time
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f'Using device: {device}')
 
 
 def find_points(input_file_path: str, output_file_path: str, working_dir, extractor, matcher, batch_size=16):
@@ -29,13 +32,10 @@ def find_points(input_file_path: str, output_file_path: str, working_dir, extrac
             # Extract keypoints
             features = []
             num_images = len(images)
-            nj = NvJpeg()
             for current_image in range(num_images):
                 print(f'Extracting features from {images[current_image]}.')
-                # image = load_image(os.path.join(working_dir, images[current_image])).cuda()
-                # nvjpg is much faster
-                image = (torch.from_numpy(
-                    nj.read(os.path.join(working_dir, images[current_image]))).float().cuda() / 255.0).permute(2, 0, 1)
+                image = torchvision.io.read_image(os.path.join(working_dir, images[current_image])).to(device,
+                                                                                                       dtype=torch.float32) / 255.0
                 feats = extractor.extract(image)
                 features.append(
                     {
@@ -96,8 +96,8 @@ if __name__ == '__main__':
         print('LightGlue-CPFind: No project file given')
         exit(-1)
 
-    extractor = SuperPoint(max_num_keypoints=128).eval().cuda()
-    matcher = LightGlue(features='superpoint').eval().cuda()
+    extractor = SuperPoint(max_num_keypoints=128).eval().to(device)
+    matcher = LightGlue(features='superpoint').eval().to(device)
 
     project_path = os.path.abspath(args.input_project)
     working_dir = os.path.dirname(project_path)
